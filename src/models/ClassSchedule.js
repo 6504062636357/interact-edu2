@@ -4,50 +4,38 @@ const classScheduleSchema = new mongoose.Schema({
   courseId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Course",
-    required: true,
+    required: true
   },
-
-  // ใช้ teacherName ไปก่อน (ยังไม่ ref instructor)
-  teacherName: {
-    type: String,
-    required: true,
+  teacherId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
   },
-
-  teacherRating: {
-    type: Number,
-    default: 0,
-  },
-
-  // level ยังเก็บไว้ได้ (แม้ frontend ยังไม่ใช้)
-  level: {
-    type: Number,
-    required: true,
-  },
-
   date: {
-    type: String, // "2025-04-07"
-    required: true,
+    type: String,
+    required: true
   },
-
   startTime: {
-    type: String, // "13:00"
-    required: true,
+    type: String,
+    required: true
   },
-
   endTime: {
-    type: String, // "14:00"
-    required: true,
+    type: String,
+    required: true
   },
-
-  maxStudents: {
+  capacity: {
     type: Number,
-    default: 10,
+    default: 1
   },
-
   bookedCount: {
     type: Number,
-    default: 0,
+    default: 0
   },
-});
+  status: {
+    type: String,
+    enum: ["open", "closed", "cancelled"],
+    default: "open"
+  }
+}, { timestamps: true });
 
 export default mongoose.model("ClassSchedule", classScheduleSchema);

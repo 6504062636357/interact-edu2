@@ -11,28 +11,24 @@ const router = express.Router();
 // GET /api/dashboard
 router.get("/", async (req, res) => {
   try {
-    // เปลี่ยนจากรับ req.user.id เป็นรับ uid จาก Query String (?uid=...)
-    const { uid } = req.query;
+    const { uid } = req.query; // รับ uid จาก frontend
 
     if (!uid) {
-      return res.status(400).json({ message: "Firebase UID is required" });
+      return res.status(400).json({ message: "UID is required" });
     }
 
-    // 1. ค้นหา User ด้วย firebaseUid (แทนที่การใช้ findById)
-    const user = await User.findOne({ firebaseUid: uid }).select("name learnedToday goalMinutes");
+    // แก้ตรงนี้: เปลี่ยน firebaseUid -> authUid
+    const user = await User.findOne({ authUid: uid }).select("name learnedToday goalMinutes");
 
     if (!user) {
-      return res.status(404).json({ message: "User not found in MongoDB" });
+      return res.status(404).json({ message: "User not found in MongoDB (check authUid)" });
     }
 
-    // 2. ดึงข้อมูลอื่นๆ โดยใช้ _id ของ User ที่เจอใน MongoDB
     const userIdInMongo = user._id;
-
     const hotCourse = await Course.findOne({ isHotCourse: true }).select("title description imageUrl");
     const userCourses = await UserCourse.find({ userId: userIdInMongo }).populate("courseId", "title totalLessons");
     const announcement = await Announcement.findOne().sort({ createdAt: -1 });
 
-    // 3. ส่งข้อมูลกลับไป
     res.json({
       user,
       hotCourse,

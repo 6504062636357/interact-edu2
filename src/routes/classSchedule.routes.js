@@ -3,17 +3,30 @@ import ClassSchedule from "../models/ClassSchedule.js";
 
 const router = express.Router();
 
-// GET schedules by course
-router.get("/course/:courseId", async (req, res) => {
+// ⭐ เพิ่มตารางเรียน
+router.post("/", async (req, res) => {
   try {
-    const { courseId } = req.params;
+    const {
+      courseId,
+      teacherId,
+      date,
+      startTime,
+      endTime,
+      capacity
+    } = req.body;
 
-    const schedules = await ClassSchedule.find({ courseId });
+    const schedule = await ClassSchedule.create({
+      courseId,
+      teacherId,
+      date,
+      startTime,
+      endTime,
+      capacity
+    });
 
-
-    res.json(schedules);
+    res.status(201).json(schedule);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 

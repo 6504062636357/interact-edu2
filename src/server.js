@@ -16,12 +16,16 @@ app.use(cors());
 app.use("/images", express.static("public/images"));
 
 app.use(express.json());
-app.use('/api/class-schedules', classScheduleRoutes);
+
 // 1. Routes พื้นฐาน
 app.get("/", (req, res) => res.send("API OK"));
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api", courseRoutes);
+app.use("/api/class-schedules", classScheduleRoutes);
+//app.use("/api/users", userRoutes);
+
+
 
 // 2. API สำหรับซื้อคอร์ส (Enroll) ที่ถูกต้องสำหรับ Node.js ต้องแก้
 app.post('/api/enroll', authMiddleware, async (req, res) => {
@@ -49,16 +53,14 @@ app.post('/api/enroll', authMiddleware, async (req, res) => {
     }
 });
 
-// ใน server.js
 app.post('/api/users/sync', async (req, res) => {
   try {
     const { firebaseUid, email, name, learnedToday, goalMinutes } = req.body;
 
-    // ใช้ firebaseUid เป็นตัวค้นหา ถ้าไม่เจอจะสร้างใหม่ (upsert: true)
     const user = await User.findOneAndUpdate(
-      { firebaseUid: firebaseUid },
+      { authUid: firebaseUid }, // ค้นหาด้วย authUid
       {
-        firebaseUid,
+        authUid: firebaseUid,    // บันทึกเข้า authUid
         email,
         name,
         learnedToday: learnedToday || 0,
@@ -74,21 +76,21 @@ app.post('/api/users/sync', async (req, res) => {
   }
 });
 
+// API สำหรับจองคอร์ส (แก้ให้เหลืออันเดียวและใช้ authUid)
 app.post('/api/bookings', async (req, res) => {
   try {
     const { firebaseUid, course_id } = req.body;
 
-    // 1. หาตัวตนของ User ใน MongoDB จาก Firebase UID
-    const user = await User.findOne({ firebaseUid: firebaseUid });
+    // เปลี่ยน firebaseUid -> authUid
+    const user = await User.findOne({ authUid: firebaseUid });
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    // 2. บันทึกลงในตาราง enrollments (เพื่อให้มันไปโชว์ใน My Class)
     const db = mongoose.connection.db;
     const newEnrollment = {
-      user_id: user._id.toString(), // ใช้เลข ID ของ MongoDB ที่เราหามาได้
+      user_id: user._id.toString(),
       course_id: course_id,
       enrolled_at: new Date(),
-      status: 'completed', // หรือ 'pending' ถ้าต้องจ่ายเงินก่อน
+      status: 'completed',
       progress: 0
     };
 
@@ -98,7 +100,6 @@ app.post('/api/bookings', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 import Enrollment from "./models/Enrollment.js"; // Import ตัวที่เราเพิ่งสร้าง
 
 // ตอนจองคอร์ส (Booking)
@@ -122,6 +123,45 @@ app.post('/api/bookings', async (req, res) => {
   }
 });
 
+import { firebaseAuth } from "./middlewares/firebaseAuth.js";
+
+app.get('/api/users/me', firebaseAuth, async (req, res) => {
+  try {
+    // req.user จะถูกยัดมาจาก firebaseAuth middleware
+    if (!req.user) return res.status(404).json({ message: "User not found" });
+    res.json(req.user);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch profile" });
+  }
+});
+
+//สำหรับการ Save/Update ข้อมูล
+app.patch('/api/users/me', firebaseAuth, async (req, res) => {
+  try {
+    const { name, phone, bio, goalMinutes } = req.body;
+
+    // อัปเดตข้อมูลโดยใช้ req.user.authUid (ที่ได้มาจาก middleware)
+    const updatedUser = await User.findOneAndUpdate(
+      { authUid: req.user.authUid },
+      {
+        $set: {
+          ...(name && { name }),
+          ...(phone && { phone }),
+          ...(bio && { bio }),
+          ...(goalMinutes && { goalMinutes })
+        }
+      },
+      { new: true }
+    );
+
+    if (!updatedUser) return res.status(404).json({ message: "User not found" });
+
+    res.json(updatedUser);
+  } catch (err) {
+    console.error("Update Error:", err);
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+});
 
 // 3. เชื่อมต่อ MongoDB
 const { PORT = 4000, MONGO_URI } = process.env;

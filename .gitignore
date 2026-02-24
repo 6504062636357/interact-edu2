@@ -1,0 +1,10 @@
+# ข้อมูลลับห้ามขึ้น GitHub
+.env
+serviceAccountKey.json
+
+# ไฟล์ขยะระบบและ Dependency
+node_modules/
+.idea/
+.gradle/
+build/
+*.log
