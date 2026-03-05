@@ -8,6 +8,7 @@ import dashboardRoutes from "./routes/dashboard.js";
 import courseRoutes from "./routes/course.routes.js";
 import { authMiddleware } from "./middlewares/authMiddleware.js";
 import classScheduleRoutes from "./routes/classSchedule.routes.js";
+import paymentRoutes from "./routes/payment.routes.js";
 
 import User from "./models/User.js";
 
@@ -20,6 +21,7 @@ app.use(express.json());
 // 1. Routes พื้นฐาน
 app.get("/", (req, res) => res.send("API OK"));
 app.use("/api/auth", authRoutes);
+app.use("/api/payment", paymentRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api", courseRoutes);
 app.use("/api/class-schedules", classScheduleRoutes);

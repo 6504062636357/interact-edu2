@@ -3,6 +3,7 @@ import User from "../models/User.js";
 import admin from "../config/firebaseAdmin.js"; // Import admin ตรงๆ สำหรับ /sync
 import { firebaseAuth } from "../middlewares/firebaseAuth.js"; // สำหรับ /me
 
+
 const router = express.Router();
 
 // ==========================================
