@@ -24,83 +24,67 @@ console.log("SECRET:", process.env.OMISE_SECRET_KEY);
 /// POST /api/payments/create
 /// =======================================
 router.post("/create", firebaseAuth, async (req, res) => {
+
   try {
+
     const { courseId, amount } = req.body;
 
-    if (!courseId || !amount) {
-      return res.status(400).json({
-        message: "courseId and amount are required",
-      });
-    }
-
-    const parsedAmount = Number(amount);
-
-    if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
-      return res.status(400).json({
-        message: "amount must be a valid number greater than 0",
-      });
-    }
-
-    /// สร้าง charge แบบ PromptPay
+    /// 1️⃣ สร้าง charge
     const charge = await omise.charges.create({
-      amount: Math.round(parsedAmount * 100), // satang
+
+      amount: amount * 100,
       currency: "thb",
+
       source: {
-        type: "promptpay",
-      },
+        type: "promptpay"
+      }
+
     });
-    console.log("QR BASE64 LENGTH:", qrBase64.length);
-    console.log("FULL CHARGE OBJECT:", JSON.stringify(charge, null, 2));
 
-    /// URL นี้ต้องใช้ secret key ถึงจะโหลดได้
-    const qrDownloadUrl = charge.source?.scannable_code?.image?.download_uri;
-
-    if (!qrDownloadUrl) {
-      return res.status(500).json({
-        message: "QR download URL not found from Omise response",
-      });
-    }
+    /// 2️⃣ เอา URL QR จาก Omise
+    const qrDownloadUrl = charge.source.scannable_code.image.download_uri;
 
     console.log("QR DOWNLOAD URL:", qrDownloadUrl);
 
-    /// fetch QR จาก Omise ด้วย secret key
+    /// 3️⃣ fetch QR จาก Omise (ต้องใช้ secret key)
     const qrImage = await axios.get(qrDownloadUrl, {
+
       responseType: "arraybuffer",
+
       auth: {
         username: process.env.OMISE_SECRET_KEY,
         password: "",
       },
+
     });
 
-    /// Omise ส่ง qr เป็น svg
+    /// 4️⃣ แปลงเป็น base64
     const qrBase64 = Buffer.from(qrImage.data).toString("base64");
+
+    /// 5️⃣ ทำเป็น data url
     const qrDataUrl = `data:image/svg+xml;base64,${qrBase64}`;
 
-    /// บันทึก payment ไว้ก่อน สถานะ pending
-    const payment = await Payment.create({
-      user: req.user._id,
-      course: courseId,
-      amount: parsedAmount,
-      chargeId: charge.id,
-      status: charge.status || "pending",
-    });
+    console.log("QR BASE64 LENGTH:", qrBase64.length);
 
-    return res.status(200).json({
-      message: "PromptPay QR created",
-      paymentId: payment._id,
+    /// 6️⃣ ส่งกลับ Flutter
+    res.json({
+
       chargeId: charge.id,
       qr: qrDataUrl,
-      status: charge.status || "pending",
-      expiresAt: charge.expires_at || null,
+      status: charge.status
+
     });
+
   } catch (err) {
+
     console.error("CREATE QR ERROR:", err);
 
-    return res.status(500).json({
-      message: "Create QR failed",
-      error: err.message,
+    res.status(500).json({
+      message: "Create QR failed"
     });
+
   }
+
 });
 
 /// =======================================
