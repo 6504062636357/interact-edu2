@@ -1,34 +1,224 @@
-import express from 'express';
-import Payment from '../models/Payment';    
-import Enrollment from '../models/Enrollment';
-import {firebaseAuth} from '../middleware/firebaseAuth.js';
+import dotenv from "dotenv";
+dotenv.config();
+
+import express from "express";
+import Omise from "omise";
+import axios from "axios";
+
+import Payment from "../models/Payment.js";
+import Enrollment from "../models/Enrollment.js";
+import { firebaseAuth } from "../middlewares/firebaseAuth.js";
 
 const router = express.Router();
 
-router.post('/payment', firebaseAuth, async (req, res) => {
-  try {
-    const { courseId, amount} = req.body;
+const omise = Omise({
+  publicKey: process.env.OMISE_PUBLIC_KEY,
+  secretKey: process.env.OMISE_SECRET_KEY,
+});
 
-    const payment = await Payment.create({
-      user: userId,
-      course: courseId,
-      amount: amount,
-      status: 'success'
+console.log("PUBLIC:", process.env.OMISE_PUBLIC_KEY);
+console.log("SECRET:", process.env.OMISE_SECRET_KEY);
+
+/// =======================================
+/// PROMPTPAY QR: CREATE PAYMENT
+/// POST /api/payments/create
+/// =======================================
+router.post("/create", firebaseAuth, async (req, res) => {
+
+  try {
+
+    const { courseId, amount } = req.body;
+
+    /// 1️⃣ สร้าง charge
+    const charge = await omise.charges.create({
+
+      amount: amount * 100,
+      currency: "thb",
+
+      source: {
+        type: "promptpay"
+      }
+
     });
-    await Enrollment.create({
-        user: req.user.uid,
+
+    /// 2️⃣ เอา URL QR จาก Omise
+    const qrDownloadUrl = charge.source.scannable_code.image.download_uri;
+
+    console.log("QR DOWNLOAD URL:", qrDownloadUrl);
+
+    /// 3️⃣ fetch QR จาก Omise (ต้องใช้ secret key)
+    const qrImage = await axios.get(qrDownloadUrl, {
+
+      responseType: "arraybuffer",
+
+      auth: {
+        username: process.env.OMISE_SECRET_KEY,
+        password: "",
+      },
+
+    });
+
+    /// 4️⃣ แปลงเป็น base64
+    const qrBase64 = Buffer.from(qrImage.data).toString("base64");
+
+    /// 5️⃣ ทำเป็น data url
+    const qrDataUrl = `data:image/svg+xml;base64,${qrBase64}`;
+
+    console.log("QR BASE64 LENGTH:", qrBase64.length);
+
+    /// 6️⃣ ส่งกลับ Flutter
+    res.json({
+
+      chargeId: charge.id,
+      qr: qrDataUrl,
+      status: charge.status
+
+    });
+
+  } catch (err) {
+
+    console.error("CREATE QR ERROR:", err);
+
+    res.status(500).json({
+      message: "Create QR failed"
+    });
+
+  }
+
+});
+
+/// =======================================
+/// CHECK PAYMENT STATUS
+/// GET /api/payments/status/:id
+/// =======================================
+router.get("/status/:id", firebaseAuth, async (req, res) => {
+  try {
+    const chargeId = req.params.id;
+
+    if (!chargeId) {
+      return res.status(400).json({
+        message: "chargeId is required",
+      });
+    }
+
+    const charge = await omise.charges.retrieve(chargeId);
+
+    /// อัปเดต payment status ใน DB
+    const payment = await Payment.findOne({ chargeId });
+
+    if (payment) {
+      payment.status = charge.status;
+      await payment.save();
+
+      /// ถ้าจ่ายสำเร็จ ค่อย enroll
+      if (charge.status === "successful") {
+        const existingEnrollment = await Enrollment.findOne({
+          user: payment.user,
+          course: payment.course,
+        });
+
+        if (!existingEnrollment) {
+          await Enrollment.create({
+            user: payment.user,
+            course: payment.course,
+            progress: 0,
+            status: "active",
+          });
+        }
+      }
+    }
+
+    return res.status(200).json({
+      chargeId: charge.id,
+      status: charge.status,
+      paid: charge.paid,
+      expiresAt: charge.expires_at || null,
+    });
+  } catch (err) {
+    console.error("CHECK PAYMENT STATUS ERROR:", err);
+
+    return res.status(500).json({
+      message: "Check payment failed",
+      error: err.message,
+    });
+  }
+});
+
+/// =======================================
+/// CREDIT CARD PAYMENT (TEST MODE)
+/// POST /api/payments/card
+/// =======================================
+router.post("/card", firebaseAuth, async (req, res) => {
+  try {
+    const { courseId, amount, token } = req.body;
+
+    if (!courseId || !amount || !token) {
+      return res.status(400).json({
+        message: "courseId, amount and token are required",
+      });
+    }
+
+    const parsedAmount = Number(amount);
+
+    if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({
+        message: "amount must be a valid number greater than 0",
+      });
+    }
+
+    /// charge บัตร
+    const charge = await omise.charges.create({
+      amount: Math.round(parsedAmount * 100),
+      currency: "thb",
+      card: token,
+    });
+
+    if (charge.status !== "successful") {
+      return res.status(400).json({
+        message: "Card payment failed",
+        status: charge.status,
+      });
+    }
+
+    /// save payment
+    const payment = await Payment.create({
+      user: req.user._id,
+      course: courseId,
+      amount: parsedAmount,
+      chargeId: charge.id,
+      status: charge.status,
+    });
+
+    /// enroll ถ้ายังไม่มี
+    const existingEnrollment = await Enrollment.findOne({
+      user: req.user._id,
+      course: courseId,
+    });
+
+    let enrollment = existingEnrollment;
+
+    if (!existingEnrollment) {
+      enrollment = await Enrollment.create({
+        user: req.user._id,
         course: courseId,
         progress: 0,
-        status: 'active',
-    });
-
-    res.json({ 
-        message: "Course purchased ",payment
-    });
-    } catch (error) {
-        console.error(err);
-        res.status(500).json({ message: 'Purchase failed' });
+        status: "active",
+      });
     }
+
+    return res.status(200).json({
+      message: "Card payment successful",
+      payment,
+      enrollment,
     });
-    
-    export default router;
+  } catch (err) {
+    console.error("CARD PAYMENT ERROR:", err);
+
+    return res.status(500).json({
+      message: "Card payment failed",
+      error: err.message,
+    });
+  }
+});
+
+export default router;
