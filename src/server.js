@@ -1,7 +1,10 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
-import "dotenv/config.js";
+
 
 import authRoutes from "./routes/auth.routes.js";
 import dashboardRoutes from "./routes/dashboard.js";
@@ -9,6 +12,7 @@ import courseRoutes from "./routes/course.routes.js";
 import { authMiddleware } from "./middlewares/authMiddleware.js";
 import classScheduleRoutes from "./routes/classSchedule.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
+import webhookRoutes from "./routes/webhook.routes.js";
 
 import User from "./models/User.js";
 import Course from "./models/Course.js";
@@ -26,12 +30,15 @@ app.use(express.json());
 // 1. Routes พื้นฐาน
 app.get("/", (req, res) => res.send("API OK"));
 app.use("/api/auth", authRoutes);
-app.use("/api/payment", paymentRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api", courseRoutes);
 app.use("/api/class-schedules", classScheduleRoutes);
 //app.use("/api/users", userRoutes);
 app.use('/api/instructors', instructorRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/webhook", webhookRoutes);
+
+
 
 // 2. API สำหรับซื้อคอร์ส (Enroll) ที่ถูกต้องสำหรับ Node.js ต้องแก้
 app.post('/api/enroll', authMiddleware, async (req, res) => {

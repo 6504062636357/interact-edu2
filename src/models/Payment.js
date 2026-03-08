@@ -14,14 +14,10 @@ const paymentSchema = new mongoose.Schema(
 
   amount: Number,
 
-  omise_charge_id: String,
-
   status: {
     type: String,
-    enum: ["pending","success","failed"],
-    default: "pending"
+    default: "success"
   }
-
 },
 { timestamps: true }
 );
