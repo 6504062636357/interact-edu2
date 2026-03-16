@@ -1,62 +1,100 @@
 import express from "express";
 import User from "../models/User.js";
-import admin from "../config/firebaseAdmin.js"; // Import admin ตรงๆ สำหรับ /sync
-import { firebaseAuth } from "../middlewares/firebaseAuth.js"; // สำหรับ /me
-
+import admin from "../config/firebaseAdmin.js";
+import { firebaseAuth } from "../middlewares/firebaseAuth.js";
 
 const router = express.Router();
 
-// ==========================================
-// 1. ROUTE สำหรับ SYNC (สร้าง User ใหม่)
-// ==========================================
-// เราไม่ใช้ firebaseAuth middleware ตรงนี้ เพราะมันจะไป findOne แล้วพ่น 404 ออกมาดักหน้า
+
+// ===============================
+// SYNC USER (Firebase → MongoDB)
+// ===============================
 router.post("/sync", async (req, res) => {
   try {
+
     const authHeader = req.headers.authorization;
+
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({ message: "No token provided" });
     }
 
     const idToken = authHeader.split(" ")[1];
 
-    // ตรวจสอบ Token กับ Firebase (Verify Only)
+    // verify firebase token
     const decoded = await admin.auth().verifyIdToken(idToken);
-    const authUid = decoded.uid;
 
-    // หา User ถ้าไม่เจอให้สร้างใหม่ (Upsert Logic)
-    let user = await User.findOneAndUpdate(
-      { authUid: authUid },
+    const authUid = decoded.uid;
+    const email = decoded.email || "";
+    const name = decoded.name || decoded.email?.split("@")[0] || "User";
+    const photoUrl = decoded.picture || "";
+
+    // UPSERT USER
+    const user = await User.findOneAndUpdate(
       {
-        authUid: authUid,
-        email: decoded.email || "",
-        name: decoded.name || "User",
-        photoUrl: decoded.picture || "",
-        role: "student",
+        $or: [
+          { authUid: authUid },
+          { email: email }
+        ]
       },
-      { upsert: true, new: true } // ถ้าไม่มีให้สร้าง ถ้ามีให้อัปเดต
+      {
+        $set: {
+          authUid: authUid,
+          email: email,
+          name: name,
+          photoUrl: photoUrl
+        },
+        $setOnInsert: {
+          role: "student",
+          learnedToday: 0,
+          goalMinutes: 60
+        }
+      },
+      {
+        upsert: true,
+        new: true,
+        runValidators: true
+      }
     );
 
-    return res.status(201).json({ message: "User synced successfully", user });
+    return res.status(200).json({
+      message: "User synced successfully",
+      user
+    });
+
   } catch (err) {
-    console.error("SYNC ERROR:", err.message);
-    return res.status(401).json({ message: "Invalid token or Sync failed" });
+
+    console.error("SYNC ERROR:", err);
+
+    return res.status(500).json({
+      message: "Sync failed"
+    });
+
   }
 });
 
-// ==========================================
-// 2. ROUTE สำหรับดูโปรไฟล์ (GET ME)
-// ==========================================
-// ตรงนี้ใช้ firebaseAuth ได้ตามปกติ เพราะเรามั่นใจว่าผ่านการ Sync มาแล้ว
+
+// ===============================
+// GET PROFILE
+// ===============================
 router.get("/me", firebaseAuth, async (req, res) => {
   try {
-    // req.user ถูกยัดมาจาก firebaseAuth middleware
+
     if (!req.user) {
-      return res.status(404).json({ message: "User profile not found" });
+      return res.status(404).json({
+        message: "User profile not found"
+      });
     }
-    return res.json(req.user);
+
+    res.json(req.user);
+
   } catch (err) {
+
     console.error("GET ME ERROR:", err);
-    return res.status(500).json({ message: "Failed to fetch profile" });
+
+    res.status(500).json({
+      message: "Failed to fetch profile"
+    });
+
   }
 });
 

@@ -5,7 +5,7 @@ import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 
-
+import userRoutes from "./routes/user.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import courseRoutes from "./routes/course.routes.js";
@@ -37,7 +37,7 @@ app.use("/api/class-schedules", classScheduleRoutes);
 app.use('/api/instructors', instructorRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/webhook", webhookRoutes);
-
+app.use("/api/users", userRoutes);
 
 
 // 2. API สำหรับซื้อคอร์ส (Enroll) ที่ถูกต้องสำหรับ Node.js ต้องแก้
@@ -65,30 +65,6 @@ app.post('/api/enroll', authMiddleware, async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
-
-app.post('/api/users/sync', async (req, res) => {
-  try {
-    const { firebaseUid, email, name, learnedToday, goalMinutes } = req.body;
-
-    const user = await User.findOneAndUpdate(
-      { authUid: firebaseUid }, // ค้นหาด้วย authUid
-      {
-        authUid: firebaseUid,    // บันทึกเข้า authUid
-        email,
-        name,
-        learnedToday: learnedToday || 0,
-        goalMinutes: goalMinutes || 60
-      },
-      { upsert: true, new: true }
-    );
-
-    res.status(201).json(user);
-  } catch (err) {
-    console.error("Sync Error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 
 import { firebaseAuth } from "./middlewares/firebaseAuth.js";
 
