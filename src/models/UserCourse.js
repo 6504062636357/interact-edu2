@@ -7,5 +7,5 @@ const userCourseSchema = new mongoose.Schema({
   completed: { type: Boolean, default: false },
   lastAccess: Date
 });
-
+ 
 export default mongoose.model("UserCourse", userCourseSchema);
