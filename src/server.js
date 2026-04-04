@@ -13,11 +13,15 @@ import { authMiddleware } from "./middlewares/authMiddleware.js";
 import classScheduleRoutes from "./routes/classSchedule.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
 import webhookRoutes from "./routes/webhook.routes.js";
+import gradeRoutes from "./routes/grade.routes.js";
+import instructorRoutes from "./routes/instructor.routes.js";
+import { createGradeIfNotExists } from "./routes/grade.routes.js";
 
 import User from "./models/User.js";
 import Course from "./models/Course.js";
-import instructorRoutes from "./routes/instructor.routes.js";
-
+import Payment from "./models/Payment.js";
+import Grade from "./models/Grade.js";
+import Gradebook from "./models/Gradebook.js";
 import Enrollment from "./models/Enrollment.js";
 
 
@@ -38,7 +42,7 @@ app.use('/api/instructors', instructorRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/users", userRoutes);
-
+app.use("/api/grades", gradeRoutes);
 
 // 2. API สำหรับซื้อคอร์ส (Enroll) ที่ถูกต้องสำหรับ Node.js ต้องแก้
 app.post('/api/enroll', authMiddleware, async (req, res) => {
@@ -122,22 +126,70 @@ app.post('/teacher-availability', async (req, res) => {
 
 
 // POST: นักเรียนส่งคำขอจอง
+//app.post('/api/bookings', async (req, res) => {
+//  try {
+//    const { authUid, course_id, instructor_id, booking_date, booking_time } = req.body;
+//
+//    const newBooking = new Enrollment({
+//      authUid,         // ID นักเรียนจาก Firebase
+//      course_id,      // ID วิชาที่เลือก
+//      instructor_id,  // ID ครูที่เลือก
+//      booking_date,   // วันที่เลือกเรียน
+//      booking_time,   // ช่วงเวลา (เช่น 11:00 AM - 13:00 PM)
+//      status: 'pending' // สถานะเริ่มต้นคือ "รออนุมัติ"
+//    });
+//
+//    await newBooking.save();
+//    res.status(201).json({ message: "ส่งคำขอจองสำเร็จ!", id: newBooking._id });
+//  } catch (err) {
+//    res.status(500).json({ error: err.message });
+//  }
+//});
+//แก้โดยเก็บเช็คสถานะจาก payment ก่อนว่าจ่ายตังยัง
+
 app.post('/api/bookings', async (req, res) => {
   try {
-    const { authUid, course_id, instructor_id, booking_date, booking_time } = req.body;
+    const { authUid, course_id, instructor_id, booking_date, booking_time, payment_id } = req.body;
 
+    console.log("--- New Booking Request ---");
+    console.log("Course ID:", course_id);
+    console.log("Payment ID ที่ส่งมา:", payment_id);
+
+    // 2. ตรวจสอบสถานะการจ่ายเงิน
+    // ค้นหา Payment ที่ ID ตรงกัน และสถานะต้องเป็น 'successful' เท่านั้น
+    const payment = await Payment.findOne({
+      _id: payment_id,
+      status: 'successful'
+    });
+
+    if (!payment) {
+      console.log(" ไม่พบรายการจ่ายเงินที่สำเร็จสำหรับ ID:", payment_id);
+      return res.status(400).json({ error: "ยังไม่ได้ชำระเงิน หรือรหัสการชำระเงินไม่ถูกต้อง" });
+    }
+
+    console.log(" ตรวจสอบการจ่ายเงินสำเร็จ (Payment Found)");
+
+    // 3. สร้างรายการจองใหม่ (Enrollment)
     const newBooking = new Enrollment({
       authUid,         // ID นักเรียนจาก Firebase
-      course_id,      // ID วิชาที่เลือก
-      instructor_id,  // ID ครูที่เลือก
-      booking_date,   // วันที่เลือกเรียน
-      booking_time,   // ช่วงเวลา (เช่น 11:00 AM - 13:00 PM)
-      status: 'pending' // สถานะเริ่มต้นคือ "รออนุมัติ"
+      course_id,      // ID วิชา
+      instructor_id,  // ID ครู
+      booking_date,   // วันที่จอง
+      booking_time,   // เวลาที่จอง
+      payment_id: payment._id, // เก็บอ้างอิงกลับไปที่ตาราง Payment
+      status: 'pending' // เริ่มต้นเป็น Pending เพื่อให้ครูกด Accept
     });
 
     await newBooking.save();
-    res.status(201).json({ message: "ส่งคำขอจองสำเร็จ!", id: newBooking._id });
+
+    console.log(" สร้างการจองสำเร็จ ID:", newBooking._id);
+    res.status(201).json({
+      message: "ส่งคำขอจองสำเร็จ!",
+      id: newBooking._id
+    });
+
   } catch (err) {
+    console.error(" Booking Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -224,19 +276,17 @@ app.patch('/api/bookings/:id/status', async (req, res) => {
   }
 });
 
-// ✅ ตัวอย่าง Logic ในการเช็คคนเต็มก่อนกดยืนยัน (Accept)
 app.patch('/api/bookings/accept/:id', async (req, res) => {
   try {
     const bookingId = req.params.id;
-
-    // 1. ดึงข้อมูลการจองที่ครูกำลังจะกดรับมาดู
     const currentBooking = await Enrollment.findById(bookingId);
 
-    // 2. ดึงข้อมูลคอร์สเพื่อดูค่า maxStudents (ที่เราเพิ่งแก้เป็น 5)
+    if (!currentBooking) {
+      return res.status(404).json({ error: "ไม่พบการจอง" });
+    }
+
     const course = await Course.findById(currentBooking.course_id);
 
-    // 3. นับจำนวนคนที่ "จองสำเร็จแล้ว" (Accepted หรือ Completed)
-    // ในคอร์สนี้ วันนี้ และเวลานี้
     const acceptedCount = await Enrollment.countDocuments({
       course_id: currentBooking.course_id,
       booking_date: currentBooking.booking_date,
@@ -244,19 +294,117 @@ app.patch('/api/bookings/accept/:id', async (req, res) => {
       status: { $in: ['accepted', 'completed'] }
     });
 
-    // 4. เช็คเงื่อนไข: ถ้าคนจองเต็มแล้ว ให้ส่ง Error กลับไป
     if (acceptedCount >= course.maxStudents) {
       return res.status(400).json({
         message: `คลาสรอบนี้เต็มแล้ว (รับสูงสุด ${course.maxStudents} คน)`
       });
     }
 
-    // 5. ถ้ายังไม่เต็ม ให้เปลี่ยนสถานะเป็น accepted (ขึ้นสีส้ม)
     currentBooking.status = 'accepted';
     await currentBooking.save();
 
+    // ✅ log ดูก่อนเสมอ
+    console.log("📌 course_id จาก booking:", currentBooking.course_id);
+    console.log("📌 instructor_id จาก booking:", currentBooking.instructor_id);
+
+    // ✅ หา Gradebook จาก course_id ของ booking นี้โดยตรง
+    let gradebook = await Gradebook.findOne({
+      course_id: currentBooking.course_id
+    });
+
+    if (!gradebook) {
+      // ❌ ไม่มี → สร้างใหม่
+      gradebook = await Gradebook.create({
+        course_id: currentBooking.course_id,
+        teacher_id: new mongoose.Types.ObjectId(currentBooking.instructor_id),
+        columns: [{ key: "attend", label: "Attendance", max: 10 }]
+      });
+      console.log("✅ Created Gradebook:", gradebook._id, "for course:", currentBooking.course_id);
+    } else {
+      console.log("✅ Gradebook already exists:", gradebook._id);
+    }
+
+    // ✅ สร้าง Grade ให้นักเรียน
+    await createGradeIfNotExists(
+      currentBooking.authUid,
+      currentBooking.course_id
+    );
+
     res.json({ message: "ยืนยันการสอนเรียบร้อย! ระบบจะขึ้นสีส้มในปฏิทิน" });
 
+  } catch (err) {
+    console.error("❌ Accept Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/grades/sync', async (req, res) => {
+  try {
+    const acceptedEnrollments = await Enrollment.find({ status: 'accepted' });
+    console.log(`Found ${acceptedEnrollments.length} accepted enrollments`);
+
+    for (const enrollment of acceptedEnrollments) {
+
+      // ✅ เช็ค user ก่อน — ถ้าไม่มีให้ข้ามไป
+      const user = await mongoose.model("User").findOne({ authUid: enrollment.authUid });
+      if (!user) {
+        console.log("⚠️ Skip - ไม่พบ user:", enrollment.authUid);
+        continue; // ข้ามไป enrollment ถัดไป
+      }
+
+      // ✅ เช็ค Gradebook — ถ้าไม่มีให้สร้าง
+      let gradebook = await Gradebook.findOne({ course_id: enrollment.course_id });
+      if (!gradebook) {
+        console.log("➕ Creating Gradebook for course:", enrollment.course_id);
+        gradebook = await Gradebook.create({
+          course_id: enrollment.course_id,
+          teacher_id: new mongoose.Types.ObjectId(enrollment.instructor_id),
+          columns: [{ key: "attend", label: "Attendance", max: 10 }]
+        });
+        console.log("✅ Created Gradebook:", gradebook._id);
+      }
+
+      // ✅ สร้าง Grade ให้นักเรียน
+      await createGradeIfNotExists(enrollment.authUid, enrollment.course_id);
+    }
+
+    const totalGradebooks = await Gradebook.countDocuments();
+    const totalGrades = await Grade.countDocuments();
+    console.log("📊 Total Gradebooks:", totalGradebooks);
+    console.log("📊 Total Grades:", totalGrades);
+
+    res.json({ message: `Synced ${acceptedEnrollments.length} enrollments`, totalGradebooks, totalGrades });
+  } catch (err) {
+    console.error("Sync Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/grades/fix-gradebook-id', async (req, res) => {
+  try {
+    const grades = await Grade.find();
+    let fixed = 0;
+
+    for (const grade of grades) {
+      // ✅ หา Gradebook ทั้งหมดของ course นี้
+      const gradebooks = await Gradebook.find({
+        course_id: grade.course_id
+      });
+
+      if (!gradebooks.length) continue;
+
+      // ✅ เลือกอันที่มี columns มากที่สุด
+      const best = gradebooks.sort((a, b) => b.columns.length - a.columns.length)[0];
+
+      console.log(`Grade ${grade._id} → Gradebook ${best._id} (${best.columns.length} columns)`);
+
+      await Grade.findByIdAndUpdate(grade._id, {
+        gradebook_id: best._id
+      });
+      fixed++;
+    }
+
+    res.json({ message: `Fixed ${fixed} grades` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
