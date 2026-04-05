@@ -11,13 +11,14 @@
   "dependencies": {
     "axios": "^1.13.6",
     "bcrypt": "^6.0.0",
-    "cors": "^2.8.5",
+    "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.1.0",
     "firebase-admin": "^13.7.0",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.20.0",
     "mongoose": "^8.18.2",
+    "multer": "^2.1.1",
     "omise": "^1.1.0"
   },
   "devDependencies": {
