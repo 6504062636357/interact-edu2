@@ -19,4 +19,5 @@ if (!admin.apps.length) {
   });
 }
 
+export const storage = admin.storage();
 export default admin;

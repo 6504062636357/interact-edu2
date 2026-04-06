@@ -99,12 +99,19 @@ export const profile = async (req, res) => {
 // --- ✅ 4. Register With Firebase (ของใหม่ที่รองรับ 3 ไฟล์) ---
 export const registerWithFirebase = async (req, res) => {
   try {
+    console.log("BODY:", req.body);
+    console.log("FILES:", req.files);
+    console.log("FIREBASE:", req.firebase);
+
     const {
       authUid,
       email,
       name,
       role = "student",
       teacherSubject,
+      degreeCertificateUrl,
+      teachingLicenseUrl,
+      transcriptUrl,
     } = req.body || {};
 
     if (!req.firebase) {
@@ -122,10 +129,6 @@ export const registerWithFirebase = async (req, res) => {
     const normalizedRole = role === "teacher" ? "teacher" : "student";
     const normalizedEmail = email.trim().toLowerCase();
 
-    let degreeCertificateUrl = "";
-    let teachingLicenseUrl = "";
-    let transcriptUrl = "";
-
     const existingUser = await User.findOne({
       $or: [
         { authUid },
@@ -139,38 +142,10 @@ export const registerWithFirebase = async (req, res) => {
         return res.status(400).json({ message: "Teacher subject is required" });
       }
 
-      // ตรวจสอบว่ามีไฟล์ส่งมาไหม
-      if (!req.files || Object.keys(req.files).length === 0) {
-        return res.status(400).json({ message: "Teacher documents are required" });
-      }
-
-      const uploadDir = path.join(process.cwd(), "uploads", "teacher_documents");
-      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
-      const extByMime = {
-        "application/pdf": ".pdf",
-        "image/jpeg": ".jpg",
-        "image/jpg": ".jpg",
-        "image/png": ".png",
-      };
-
-      const saveFile = (fileArray, prefix) => {
-        const file = fileArray[0];
-        const ext = extByMime[file.mimetype] || path.extname(file.originalname) || ".pdf";
-        const safeFileName = `${prefix}_${authUid}_${Date.now()}${ext}`;
-        const filePath = path.join(uploadDir, safeFileName);
-        fs.writeFileSync(filePath, file.buffer);
-        return `/uploads/teacher_documents/${safeFileName}`;
-      };
-
-      if (req.files.degreeCertificateUrl) {
-        degreeCertificateUrl = saveFile(req.files.degreeCertificateUrl, "degree");
-      }
-      if (req.files.teachingLicenseUrl) {
-        teachingLicenseUrl = saveFile(req.files.teachingLicenseUrl, "license");
-      }
-      if (req.files.transcriptUrl) {
-        transcriptUrl = saveFile(req.files.transcriptUrl, "transcript");
+      if (!degreeCertificateUrl || !teachingLicenseUrl || !transcriptUrl) {
+        return res.status(400).json({
+          message: "Teacher document URLs are required",
+        });
       }
     }
 
@@ -190,15 +165,15 @@ export const registerWithFirebase = async (req, res) => {
       ...(normalizedRole === "teacher"
         ? {
             subject: teacherSubject.trim(),
-            degreeCertificateUrl,
-            teachingLicenseUrl,
-            transcriptUrl,
+            degreeCertificateUrl: degreeCertificateUrl.trim(),
+            teachingLicenseUrl: teachingLicenseUrl.trim(),
+            transcriptUrl: transcriptUrl.trim(),
           }
-        : { 
-            subject: "", 
-            degreeCertificateUrl: "", 
-            teachingLicenseUrl: "", 
-            transcriptUrl: "" 
+        : {
+            subject: "",
+            degreeCertificateUrl: "",
+            teachingLicenseUrl: "",
+            transcriptUrl: "",
           }),
     };
 
@@ -227,7 +202,6 @@ export const registerWithFirebase = async (req, res) => {
       message: "User registered successfully",
       user: safeUser,
     });
-
   } catch (error) {
     console.error("REGISTER WITH FIREBASE ERROR:", error);
     return res.status(500).json({ message: error.message || "Internal server error" });
