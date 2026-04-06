@@ -8,3 +8,4 @@ node_modules/
 .gradle/
 build/
 *.log
+node_modules
