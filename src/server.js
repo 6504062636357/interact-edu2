@@ -23,22 +23,28 @@ import Payment from "./models/Payment.js";
 import Grade from "./models/Grade.js";
 import Gradebook from "./models/Gradebook.js";
 import Enrollment from "./models/Enrollment.js";
-
+import { firebaseAuth } from "./middlewares/firebaseAuth.js";
 
 const app = express();
-app.use(cors());
+
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
+
 app.use("/images", express.static("public/images"));
+app.use("/uploads", express.static("uploads"));
 
 app.use(express.json());
 
-// 1. Routes พื้นฐาน
 app.get("/", (req, res) => res.send("API OK"));
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api", courseRoutes);
 app.use("/api/class-schedules", classScheduleRoutes);
-//app.use("/api/users", userRoutes);
-app.use('/api/instructors', instructorRoutes);
+app.use("/api/instructors", instructorRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/users", userRoutes);
@@ -70,7 +76,7 @@ app.post('/api/enroll', authMiddleware, async (req, res) => {
     }
 });
 
-import { firebaseAuth } from "./middlewares/firebaseAuth.js";
+
 
 app.get('/api/users/me', firebaseAuth, async (req, res) => {
   try {
