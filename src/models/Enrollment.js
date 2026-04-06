@@ -20,14 +20,22 @@ const enrollmentSchema = new mongoose.Schema(
     index: true
   },
 
+  // ⭐ เพิ่มตัวนี้
+  sessionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Session",
+    index: true
+  },
+
+
   booking_date: {
     type: String,
-    required: true
+    //required: true
   },
 
   booking_time: {
     type: String,
-    required: true
+    //required: true
   },
 
   status: {
@@ -48,6 +56,5 @@ const enrollmentSchema = new mongoose.Schema(
 },
 { timestamps: true }
 );
-
 const Enrollment = mongoose.model("Enrollment", enrollmentSchema);
 export default Enrollment;

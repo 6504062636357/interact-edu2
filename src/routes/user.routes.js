@@ -98,4 +98,50 @@ router.get("/me", firebaseAuth, async (req, res) => {
   }
 });
 
+// ===============================
+// GET USER BY AUTH UID (สำหรับแชท)
+// ===============================
+router.get("/by-auth/:authId", async (req, res) => {
+  try {
+    const user = await User.findOne({ authUid: req.params.authId });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({ name: user.name, role: user.role });
+
+  } catch (err) {
+    console.error("GET USER BY AUTH ERROR:", err);
+    res.status(500).json({ message: "Failed to fetch user" });
+  }
+});
+
+router.get("/search-by-name", async (req, res) => {
+  try {
+    const { name, role } = req.query;
+
+    // ★ DEBUG: ดูว่ารับค่าอะไรมา
+    console.log("SEARCH NAME:", name, "ROLE:", role);
+
+    // ★ DEBUG: ลองหาโดยไม่ filter role ก่อน
+    const allUsers = await User.find({ name: { $regex: name, $options: 'i' } });
+    console.log("FOUND USERS:", allUsers);
+
+    const user = await User.findOne({
+      name: { $regex: name, $options: 'i' },
+      role: role
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({ authUid: user.authUid, name: user.name, role: user.role });
+
+  } catch (err) {
+    console.error("SEARCH USER ERROR:", err);
+    res.status(500).json({ message: "Failed to search user" });
+  }
+});
 export default router;

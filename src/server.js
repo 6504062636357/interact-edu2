@@ -5,6 +5,7 @@ import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 
+import { firebaseAuth } from "./middlewares/firebaseAuth.js";
 import userRoutes from "./routes/user.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import dashboardRoutes from "./routes/dashboard.js";
@@ -23,10 +24,10 @@ import Payment from "./models/Payment.js";
 import Grade from "./models/Grade.js";
 import Gradebook from "./models/Gradebook.js";
 import Enrollment from "./models/Enrollment.js";
-import { firebaseAuth } from "./middlewares/firebaseAuth.js";
+import Session from "./models/Session.js";
 
 const app = express();
-
+//app.use(cors());
 app.use(
   cors({
     origin: true,
@@ -39,17 +40,19 @@ app.use("/uploads", express.static("uploads"));
 
 app.use(express.json());
 
+// 1. Routes พื้นฐาน
 app.get("/", (req, res) => res.send("API OK"));
 app.use("/api/auth", authRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api", courseRoutes);
 app.use("/api/class-schedules", classScheduleRoutes);
-app.use("/api/instructors", instructorRoutes);
+//app.use("/api/users", userRoutes);
+app.use('/api/instructors', instructorRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/webhook", webhookRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/grades", gradeRoutes);
-
+app.use("/api/instructors", instructorRoutes);
 // 2. API สำหรับซื้อคอร์ส (Enroll) ที่ถูกต้องสำหรับ Node.js ต้องแก้
 app.post('/api/enroll', authMiddleware, async (req, res) => {
     try {
@@ -75,7 +78,6 @@ app.post('/api/enroll', authMiddleware, async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
-
 
 
 app.get('/api/users/me', firebaseAuth, async (req, res) => {
@@ -225,21 +227,33 @@ app.patch('/api/bookings/:id/status', async (req, res) => {
 app.get('/api/bookings/teacher/:instructorId', async (req, res) => {
   try {
     const { instructorId } = req.params;
-
     const enrollments = await Enrollment.find({ instructor_id: instructorId }).lean();
 
-    // ✅ ใส่โค้ดตรงนี้
     const enrichedData = await Promise.all(enrollments.map(async (item) => {
-
       const user = await User.findOne({ authUid: item.authUid });
-
       const course = await Course.findById(item.course_id);
+
+      let bookingDate = item.booking_date || '';
+      let bookingTime = item.booking_time || '';
+      let sessionMeetLink = '';
+
+      if (item.sessionId) {
+        const session = await Session.findById(item.sessionId);
+        if (session) {
+          bookingDate = bookingDate || session.date || '';
+          bookingTime = bookingTime || `${session.startTime} - ${session.endTime}`;
+          sessionMeetLink = session.meetLink || '';
+        }
+      }
 
       return {
         ...item,
         student_name: user ? user.name : "Unknown Student",
         student_photo: user ? user.photoUrl : "",
-        course_name: course ? course.title : "Unknown Course"
+        course_name: course ? course.title : "Unknown Course",
+        booking_date: bookingDate,
+        booking_time: bookingTime,
+        meetLink: sessionMeetLink,
       };
     }));
 
@@ -249,6 +263,7 @@ app.get('/api/bookings/teacher/:instructorId', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // เปลี่ยนจากแบบเดิม เป็นแบบ Regex เพื่อความแม่นยำ
 app.get('/api/instructors/search', async (req, res) => {
@@ -411,6 +426,367 @@ app.post('/api/grades/fix-gradebook-id', async (req, res) => {
     }
 
     res.json({ message: `Fixed ${fixed} grades` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ===============================
+// GET MY ENROLLMENTS (คอร์สที่นักเรียนลงทะเบียนแล้ว)
+// ===============================
+app.get('/api/enrollments/my', firebaseAuth, async (req, res) => {
+  try {
+    const authUid = req.user.authUid;
+
+    const enrollments = await Enrollment.find({
+      authUid: authUid,
+      status: 'accepted'
+    }).lean();
+
+    const enriched = await Promise.all(enrollments.map(async (item) => {
+      const course = await Course.findById(item.course_id);
+      const instructor = await User.findOne({ _id: item.instructor_id });
+
+      // ★ ดึงข้อมูล session ถ้ามี sessionId
+      let sessionDate = item.booking_date || '';
+      let sessionTime = item.booking_time || '';
+      let sessionMeetLink = '';
+
+      if (item.sessionId) {
+        const session = await Session.findById(item.sessionId);
+        if (session) {
+          sessionDate = session.date || sessionDate;
+          sessionTime = sessionTime || `${session.startTime} - ${session.endTime}`;
+          sessionMeetLink = session.meetLink || '';
+        }
+      }
+
+      return {
+        ...item,
+        course_name: course ? course.title : "Unknown Course",
+        course_image: course ? course.imageUrl : "",
+        course_category: course ? course.category : "",
+        course_price: course ? course.price : 0,
+        course_duration: course ? course.durationHours : 0,
+        instructor_name: instructor ? instructor.name : "Unknown",
+        meetLink: sessionMeetLink || (course ? (course.meetLink || "") : ""),
+        // ★ ส่ง date/time จาก session กลับไปด้วย
+        booking_date: sessionDate,
+        booking_time: sessionTime,
+      };
+    }));
+
+    res.json(enriched);
+  } catch (err) {
+    console.error("GET MY ENROLLMENTS ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===============================
+// GET SESSIONS BY COURSE
+// ===============================
+app.get('/api/sessions/by-course/:courseId', firebaseAuth, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const user = req.user;
+
+    const sessions = await Session.find({ courseId: courseId })
+      .sort({ date: 1, startTime: 1 });
+
+    // หา enrollments ของ user นี้ในคอร์สนี้
+    const myEnrollments = await Enrollment.find({
+      authUid: user.authUid,
+      course_id: courseId,
+      status: 'accepted'
+    });
+
+    // ดึง sessionId ที่ user จองแล้ว
+    const mySessionIds = myEnrollments.map(e =>
+      e.sessionId ? e.sessionId.toString() : ''
+    );
+
+    // หาชื่อครูจาก teacherId
+    const result = await Promise.all(sessions.map(async (s) => {
+      const teacher = await User.findById(s.teacherId);
+      const isBookedByMe = mySessionIds.includes(s._id.toString());
+
+      return {
+        _id: s._id,
+        date: s.date,
+        startTime: s.startTime,
+        endTime: s.endTime,
+        teacherName: teacher ? teacher.name : 'ไม่ระบุ',
+        meetLink: isBookedByMe ? (s.meetLink || '') : '',
+        maxSeats: s.maxSeats,
+        bookedSeats: s.bookedSeats || 0,
+        status: s.status,
+        isBookedByMe: isBookedByMe,
+      };
+    }));
+
+    res.json(result);
+  } catch (err) {
+    console.error("GET SESSIONS ERROR:", err);
+    res.status(500).json({ message: "Failed to load sessions" });
+  }
+});
+
+// ===============================
+// BOOK SESSION (ต้องใส่ตรงนี้)
+// ===============================
+app.post('/api/sessions/book/:sessionId', firebaseAuth, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const user = req.user;
+
+    const session = await Session.findById(sessionId);
+
+    if (!session) {
+      return res.status(404).json({ message: "Session not found" });
+    }
+
+    if (session.bookedSeats >= session.maxSeats) {
+      return res.status(400).json({ message: "Session is full" });
+    }
+
+    const alreadyBooked = await Enrollment.findOne({
+      authUid: user.authUid,
+      sessionId: sessionId,
+    });
+
+    if (alreadyBooked) {
+      return res.status(400).json({ message: "Already booked" });
+    }
+
+    session.bookedSeats += 1;
+    await session.save();
+
+    // ★ เพิ่ม booking_date + booking_time จาก session
+    await Enrollment.create({
+      authUid: user.authUid,
+      course_id: session.courseId,
+      instructor_id: session.teacherId.toString(),
+      sessionId: session._id,
+      booking_date: session.date,                              // ★ เพิ่ม
+      booking_time: `${session.startTime} - ${session.endTime}`, // ★ เพิ่ม
+      status: "accepted"
+    });
+    // ★ เพิ่มตรงนี้ — สร้าง Grade ให้นักเรียนทันทีที่ book สำเร็จ
+    await createGradeIfNotExists(user.authUid, session.courseId.toString());
+
+    res.status(201).json({ message: "Booked successfully" });
+
+  } catch (err) {
+    console.error("BOOK SESSION ERROR:", err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+
+app.get('/api/sessions/my-bookings', firebaseAuth, async (req, res) => {
+  try {
+    const user = req.user;
+
+    const enrollments = await Enrollment.find({
+      authUid: user.authUid,
+      sessionId: { $exists: true, $ne: null },
+      status: 'accepted',
+    }).lean();
+
+    const result = await Promise.all(enrollments.map(async (e) => {
+      const session = await Session.findById(e.sessionId);
+      if (!session) return null;
+
+      const course = await Course.findById(e.course_id);
+
+      return {
+        session_id: session._id,
+        course_name: course ? course.title : 'Unknown',
+        date: session.date,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        meetLink: session.meetLink || '',  // ★ เพิ่ม meetLink
+      };
+    }));
+
+    res.json(result.filter(r => r !== null));
+
+  } catch (err) {
+    console.error("GET MY BOOKINGS ERROR:", err);
+    res.status(500).json({ message: "Failed to load my bookings" });
+  }
+});
+
+
+// ===============================
+// GET TEACHER STUDENTS
+// ===============================
+app.get('/api/users/teacher/:teacherId/students', firebaseAuth, async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+
+    // ดึง enrollments ทั้งหมดของครูคนนี้ที่ accepted
+    const enrollments = await Enrollment.find({
+      instructor_id: teacherId,
+      status: 'accepted'
+    }).lean();
+
+    // group by authUid (1 นักเรียน อาจมีหลาย enrollment)
+    const studentMap = {};
+
+    await Promise.all(enrollments.map(async (item) => {
+      const uid = item.authUid;
+      if (!uid) return;
+
+      const user = await User.findOne({ authUid: uid });
+      if (!user) return;
+
+      const course = await Course.findById(item.course_id);
+      const courseName = course ? course.title : 'Unknown';
+      const courseDuration = course ? (course.durationHours || 0) : 0;
+
+      if (!studentMap[uid]) {
+        studentMap[uid] = {
+          _id: user._id,
+          authUid: uid,
+          name: user.name || 'Unknown',
+          email: user.email || '',
+          photoUrl: user.photoUrl || '',
+          status: 'active',
+          totalHours: 0,
+          sessionsAttended: 0,
+          courses: [],
+          history: [],
+        };
+      }
+
+      // เพิ่ม course เข้าไป (ถ้ายังไม่มี)
+      const alreadyAdded = studentMap[uid].courses.find(
+        c => c.course_id?.toString() === item.course_id?.toString()
+      );
+
+      if (!alreadyAdded) {
+        studentMap[uid].courses.push({
+          course_id: item.course_id,
+          name: courseName,
+          totalHours: courseDuration,
+          progress: item.progress || 0,
+        });
+        studentMap[uid].totalHours += courseDuration;
+      }
+
+      studentMap[uid].sessionsAttended += 1;
+
+      // history
+      studentMap[uid].history.push({
+        course_name: courseName,
+        date: item.booking_date || '',
+        hours: courseDuration,
+      });
+    }));
+
+    const result = Object.values(studentMap);
+    res.json(result);
+
+  } catch (err) {
+    console.error('GET TEACHER STUDENTS ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===============================
+// PATCH: ครูบันทึก Session Result
+// update learnedHours + progress ใน Enrollment
+// ===============================
+app.patch('/api/enrollments/:id/session-result', firebaseAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { hoursToAdd, attended, note } = req.body;
+    // hoursToAdd: number (ชั่วโมงที่สอนรอบนี้)
+    // attended: boolean (มาเรียนไหม)
+    // note: string (หมายเหตุ)
+
+    const enrollment = await Enrollment.findById(id);
+    if (!enrollment) return res.status(404).json({ error: 'Enrollment not found' });
+
+    const course = await Course.findById(enrollment.course_id);
+    const totalHours = course ? (course.durationHours || 1) : 1;
+
+    // สะสมชั่วโมง
+    const currentLearned = enrollment.learnedHours || 0;
+    const newLearned = Math.min(currentLearned + (attended ? hoursToAdd : 0), totalHours);
+    const newProgress = Math.round((newLearned / totalHours) * 100);
+
+    // push session log เข้า array
+    const sessionLog = {
+      date: new Date(),
+      hours: hoursToAdd,
+      attended: attended,
+      note: note || '',
+    };
+
+    const updated = await Enrollment.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          learnedHours: newLearned,
+          progress: newProgress,
+        },
+        $push: { sessionLogs: sessionLog },
+      },
+      { new: true }
+    );
+
+    if (attended && hoursToAdd > 0) {
+      console.log("★ enrollment.authUid:", enrollment.authUid);  // ★ เพิ่ม
+      console.log("★ hoursToAdd:", hoursToAdd);                   // ★ เพิ่ม
+
+      const updatedUser = await User.findOneAndUpdate(
+        { authUid: enrollment.authUid },
+        { $inc: { learnedToday: hoursToAdd * 60 } },
+        { new: true }  // ★ เพิ่ม
+      );
+
+      console.log("★ updatedUser learnedToday:", updatedUser?.learnedToday);  // ★ เพิ่ม
+    }
+
+    res.json({
+      message: 'บันทึกสำเร็จ',
+      learnedHours: updated.learnedHours,
+      progress: updated.progress,
+    });
+  } catch (err) {
+    console.error('SESSION RESULT ERROR:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===============================
+// GET: ดึง enrollments ของ booking กลุ่มนึง
+// (ใช้ใน Session Records — ดึงนักเรียนในคลาสเดียวกัน)
+// ===============================
+app.get('/api/enrollments/session', firebaseAuth, async (req, res) => {
+  try {
+    const { courseId, date, time } = req.query;
+
+    const enrollments = await Enrollment.find({
+      course_id: courseId,
+      booking_date: date,
+      booking_time: time,
+      status: 'accepted',
+    }).lean();
+
+    const enriched = await Promise.all(enrollments.map(async (e) => {
+      const user = await User.findOne({ authUid: e.authUid });
+      return {
+        ...e,
+        student_name: user ? user.name : 'Unknown',
+      };
+    }));
+
+    res.json(enriched);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
