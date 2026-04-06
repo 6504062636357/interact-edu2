@@ -1,7 +1,7 @@
 import express from 'express';
 const router = express.Router();
 
-// ต้องใส่ .js ท้ายชื่อไฟล์เสมอนะครับ
+// ต้องใส่ .js ท้ายชื่อไฟล์เสมอ
 import Instructor from '../models/Instructor.js';
 
 // GET /api/instructors
